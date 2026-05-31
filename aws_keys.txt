@@ -1,0 +1,750 @@
+
+
+create ec2 instance download pem file and use this name in terraform without variables
+
+Terraform installation 
+To install Terraform on Amazon Linux 2023 EC2, run the following commands:
+
+1. Update the system
+sudo dnf update -y
+2. Install required packages
+sudo dnf install -y yum-utils unzip
+3. Add HashiCorp repository
+sudo dnf config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+4. Install Terraform
+sudo dnf -y install terraform
+5. Verify installation
+terraform version
+
+Terraform files -
+mkdir -p ~/terraform
+cd ~/terraform
+vi provider.tf
+vi main.tf
+vi variables.tf
+vi terraform.tfvars
+vi outputs.tf
+ssh-keygen -t rsa -b 4096
+terraform init
+terraform validate
+terraform plan
+terraform apply -auto-approve
+
+
+provider "aws" {
+  region = "eu-north-1"
+}
+
+
+# Latest Amazon Linux 2023 AMI
+
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+
+  owners = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023*"]
+  }
+}
+
+# VPC
+
+resource "aws_vpc" "employee_vpc" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "employee-vpc"
+  }
+}
+
+# Public Subnet
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.employee_vpc.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "public-subnet"
+  }
+}
+
+# Private Subnet
+
+resource "aws_subnet" "private" {
+  vpc_id     = aws_vpc.employee_vpc.id
+  cidr_block = "10.0.2.0/24"
+
+  tags = {
+    Name = "private-subnet"
+  }
+}
+
+# Internet Gateway
+
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.employee_vpc.id
+
+  tags = {
+    Name = "employee-igw"
+  }
+}
+
+# Elastic IP for NAT
+
+resource "aws_eip" "nat_eip" {
+  domain = "vpc"
+
+  depends_on = [
+    aws_internet_gateway.igw
+  ]
+
+  tags = {
+    Name = "nat-eip"
+  }
+}
+
+# NAT Gateway
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat_eip.id
+  subnet_id     = aws_subnet.public.id
+
+  depends_on = [
+    aws_internet_gateway.igw
+  ]
+
+  tags = {
+    Name = "employee-nat"
+  }
+}
+
+# Public Route Table
+
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.employee_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+
+  tags = {
+    Name = "public-rt"
+  }
+}
+
+resource "aws_route_table_association" "public_assoc" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+# Private Route Table
+
+resource "aws_route_table" "private_rt" {
+  vpc_id = aws_vpc.employee_vpc.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat.id
+  }
+
+  tags = {
+    Name = "private-rt"
+  }
+}
+
+resource "aws_route_table_association" "private_assoc" {
+  subnet_id      = aws_subnet.private.id
+  route_table_id = aws_route_table.private_rt.id
+}
+
+# Security Group
+
+resource "aws_security_group" "employee_sg" {
+  name        = "employee-sg"
+  description = "Employee Portal Security Group"
+  vpc_id      = aws_vpc.employee_vpc.id
+
+  ingress {
+    description = "SSH from VPC"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]
+  }
+
+  ingress {
+    description = "SSH Public Bastion"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "Jenkins"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "Employee Portal"
+    from_port   = 3000
+    to_port     = 3000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "PostgreSQL"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "employee-sg"
+  }
+}
+
+# Bastion Host
+
+resource "aws_instance" "bastion" {
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.public.id
+  vpc_security_group_ids = [aws_security_group.employee_sg.id]
+
+  key_name = "test-tanya"
+
+  tags = {
+    Name = "Bastion"
+  }
+}
+
+# App Server 1
+
+resource "aws_instance" "app1" {
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.private.id
+  vpc_security_group_ids = [aws_security_group.employee_sg.id]
+
+  key_name = "test-tanya"
+
+  tags = {
+    Name = "App1"
+  }
+}
+
+# App Server 2
+
+resource "aws_instance" "app2" {
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.private.id
+  vpc_security_group_ids = [aws_security_group.employee_sg.id]
+
+  key_name = "test-tanya"
+
+  tags = {
+    Name = "App2"
+  }
+}
+
+# Database Server
+
+resource "aws_instance" "db" {
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.private.id
+  vpc_security_group_ids = [aws_security_group.employee_sg.id]
+
+  key_name = "test-tanya"
+
+  tags = {
+    Name = "Database"
+  }
+}
+
+
+
+output "bastion_public_ip" {
+  value = aws_instance.bastion.public_ip
+}
+
+output "app1_private_ip" {
+  value = aws_instance.app1.private_ip
+}
+
+output "app2_private_ip" {
+  value = aws_instance.app2.private_ip
+}
+
+output "db_private_ip" {
+  value = aws_instance.db.private_ip
+}
+
+terraform output
+
+go to bastion
+install ansible
+sudo dnf install ansible-core -y
+ansible --version
+
+mkdir ~/ansible
+cd ~/ansible
+vi inventory.ini
+
+
+app1_private_ip = "10.0.2.246"
+app2_private_ip = "10.0.2.16"
+bastion_public_ip = "13.63.158.240"
+db_private_ip = "10.0.2.168"
+
+scp -i test-tanya.pem test-tanya.pem ec2-user@13.63.158.240:~  in powershell in windows
+cd /home/ec2-user
+chmod 400 ~/test-tanya.pem
+Do for all three
+ssh -i ~/test-tanya.pem ec2-user@10.0.2.246
+
+ansible appservers -i inventory.ini -m ping
+
+[bastion]
+bastion ansible_host=13.63.158.240
+
+[appservers]
+app1 ansible_host=10.0.2.246 ansible_user=ec2-user ansible_ssh_private_key_file=/home/ec2-user/test-tanya.pem
+app2 ansible_host=10.0.2.16 ansible_user=ec2-user ansible_ssh_private_key_file=/home/ec2-user/test-tanya.pem
+
+[database]
+db ansible_host=10.0.2.168 ansible_user=ec2-user ansible_ssh_private_key_file=/home/ec2-user/test-tanya.pem
+
+
+vi appservers.yml
+---
+- hosts: appservers
+  become: yes
+
+  tasks:
+
+    - name: Update packages
+      dnf:
+        name: "*"
+        state: latest
+
+    - name: Install Docker
+      dnf:
+        name: docker
+        state: present
+
+    - name: Start and Enable Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: yes
+
+    - name: Install Nginx
+      dnf:
+        name: nginx
+        state: present
+
+    - name: Start and Enable Nginx
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+ansible-playbook -i inventory.ini appservers.yml
+
+ansible appservers -i inventory.ini -a "docker --version"
+ansible appservers -i inventory.ini -a "nginx -v"
+
+
+vi db.yml
+---
+- hosts: database
+  become: yes
+
+  tasks:
+
+    - name: Install PostgreSQL
+      yum:
+        name:
+          - postgresql-server
+          - postgresql-contrib
+        state: present
+
+    - name: Initialize DB
+      command: postgresql-setup initdb
+
+    - name: Start PostgreSQL
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+ansible-playbook -i inventory.ini db.yml
+
+
+Kubernetes
+
+
+To install aws cli
+sudo dnf install unzip -y
+
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+
+unzip awscliv2.zip
+
+sudo ./aws/install
+
+aws configure
+
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+chmod +x kubectl
+
+sudo mv kubectl /usr/local/bin/
+
+kubectl version --client
+
+ARCH=amd64
+PLATFORM=$(uname -s)_$ARCH
+
+curl -sLO \
+https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_${PLATFORM}.tar.gz
+
+tar -xzf eksctl_${PLATFORM}.tar.gz
+
+sudo mv eksctl /usr/local/bin
+
+eksctl version
+
+eksctl create cluster \
+  --name tanya-cluster \
+  --region eu-north-1 \
+  --version 1.33 \
+  --nodegroup-name workers \
+  --node-type t3.micro \
+  --nodes 2 \
+  --nodes-min 1 \
+  --nodes-max 3 \
+  --managed
+
+kubectl get nodes
+
+
+vi namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: employee-portal
+
+vi deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: employee-portal
+  namespace: employee-portal
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: employee-portal
+  template:
+    metadata:
+      labels:
+        app: employee-portal
+    spec:
+      containers:
+      - name: employee-portal
+        image: tanyabitaan/employee-portal:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+vi service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: employee-portal-service
+  namespace: employee-portal
+spec:
+  selector:
+    app: employee-portal
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+  type: LoadBalancer
+
+kubectl apply -f namespace.yaml
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+
+kubectl get all -n employee-portal
+
+kubectl get pods -n employee-portal
+
+kubectl get svc -n employee-portal
+
+
+
+
+Jenkins
+
+
+
+1. Install Jenkins on Bastion
+
+Create jenkins.yml
+
+---
+- hosts: bastion
+  become: yes
+
+  tasks:
+
+    - name: Install Java 17
+      dnf:
+        name: java-17-amazon-corretto
+        state: present
+
+    - name: Add Jenkins Repository
+      get_url:
+        url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
+        dest: /etc/yum.repos.d/jenkins.repo
+
+    - name: Import Jenkins Key
+      rpm_key:
+        state: present
+        key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+
+    - name: Install Jenkins
+      dnf:
+        name: jenkins
+        state: present
+
+    - name: Start Jenkins
+      service:
+        name: jenkins
+        state: started
+        enabled: yes
+
+Run:
+
+ansible-playbook -i inventory.ini jenkins.yml
+2. Open Jenkins Port
+
+Security Group inbound:
+
+TCP 8080
+Source: 0.0.0.0/0
+
+Access:
+
+http://<bastion-public-ip>:8080
+
+Example:
+
+http://13.63.xxx.xxx:8080
+3. Get Jenkins Password
+
+On Bastion:
+
+sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+4. Install Docker on Bastion
+
+Required because Jenkins will build Docker images.
+
+sudo dnf install docker -y
+sudo systemctl enable docker
+sudo systemctl start docker
+
+Add Jenkins user:
+
+sudo usermod -aG docker jenkins
+sudo systemctl restart jenkins
+
+Verify:
+
+docker version
+5. Install Git
+sudo dnf install git -y
+
+Verify:
+
+git --version
+6. Install Docker Pipeline Plugin
+
+Jenkins Dashboard:
+
+Manage Jenkins
+→ Plugins
+→ Available Plugins
+→ Docker Pipeline
+→ Git
+→ Pipeline
+
+Install and restart Jenkins.
+
+7. Add DockerHub Credentials
+Manage Jenkins
+→ Credentials
+→ Global
+→ Add Credentials
+
+Create:
+
+ID: dockerhub
+
+Username: your_dockerhub_user
+Password: your_dockerhub_password
+8. Create Jenkins Pipeline Job
+
+Repository:
+
+Employee Portal Repository
+
+Pipeline Script:
+
+pipeline {
+
+    agent any
+
+    environment {
+        IMAGE_NAME = "employee-portal"
+        DOCKER_USER = "YOUR_DOCKERHUB_USER"
+    }
+
+    stages {
+
+        stage('Clone Code') {
+            steps {
+                git 'https://github.com/Kiaraintellipaat/Employee-Portal-with-Automated-DevOps-Delivery-Pipeline.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t $DOCKER_USER/$IMAGE_NAME:$BUILD_NUMBER .'
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+
+                    sh '''
+                    docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+                    docker push $DOCKER_USER/$IMAGE_NAME:$BUILD_NUMBER
+                    '''
+                }
+            }
+        }
+    }
+}
+9. Trigger Build
+
+Click:
+
+Build Now
+
+Expected:
+
+SUCCESS
+10. Validate Docker Image
+
+On Bastion:
+
+docker images
+
+You should see:
+
+employee-portal
+11. Access Employee Portal
+
+If running directly with Docker:
+
+docker run -d -p 80:3000 \
+YOUR_DOCKERHUB_USER/employee-portal:latest
+
+Security Group:
+
+80/tcp
+0.0.0.0/0
+
+Access:
+
+http://<bastion-public-ip>
+12. Assignment Validation
+
+Take screenshots of:
+
+✓ terraform apply
+
+✓ ansible-playbook appservers.yml
+
+✓ ansible-playbook jenkins.yml
+
+✓ Jenkins Dashboard
+
+✓ Successful Jenkins Pipeline
+
+✓ docker images
+
+✓ Employee Portal page in browser
+
+✓ kubectl get pods
+
+✓ kubectl get svc
+
+Before proceeding, verify Jenkins is running:
+
+sudo systemctl status jenkins
+
+and share the output if there are any issues.
+
+
