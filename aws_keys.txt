@@ -5,6 +5,10 @@ create ec2 instance download pem file and use this name in terraform without var
 Terraform installation 
 To install Terraform on Amazon Linux 2023 EC2, run the following commands:
 
+aws configure
+AKIAVPNQA7XJIPTVUCVU
+xlIjpGelSUZjTfHnvVGX0s1nw/TNODbw0YOMBBI0
+
 1. Update the system
 sudo dnf update -y
 2. Install required packages
@@ -21,9 +25,8 @@ mkdir -p ~/terraform
 cd ~/terraform
 vi provider.tf
 vi main.tf
-vi variables.tf
-vi terraform.tfvars
 vi outputs.tf
+//Don't execute it
 ssh-keygen -t rsa -b 4096
 terraform init
 terraform validate
@@ -319,28 +322,31 @@ cd ~/ansible
 vi inventory.ini
 
 
-app1_private_ip = "10.0.2.246"
-app2_private_ip = "10.0.2.16"
-bastion_public_ip = "13.63.158.240"
-db_private_ip = "10.0.2.168"
-
-scp -i test-tanya.pem test-tanya.pem ec2-user@13.63.158.240:~  in powershell in windows
-cd /home/ec2-user
-chmod 400 ~/test-tanya.pem
-Do for all three
-ssh -i ~/test-tanya.pem ec2-user@10.0.2.246
-
-ansible appservers -i inventory.ini -m ping
+app1_private_ip = "10.0.2.23"
+app2_private_ip = "10.0.2.75"
+bastion_public_ip = "16.170.98.227"
+db_private_ip = "10.0.2.7"
 
 [bastion]
-bastion ansible_host=13.63.158.240
+bastion ansible_host=16.170.98.227
 
 [appservers]
-app1 ansible_host=10.0.2.246 ansible_user=ec2-user ansible_ssh_private_key_file=/home/ec2-user/test-tanya.pem
-app2 ansible_host=10.0.2.16 ansible_user=ec2-user ansible_ssh_private_key_file=/home/ec2-user/test-tanya.pem
+app1 ansible_host=10.0.2.23 ansible_user=ec2-user ansible_ssh_private_key_file=/home/ec2-user/test-tanya.pem
+app2 ansible_host=10.0.2.75 ansible_user=ec2-user ansible_ssh_private_key_file=/home/ec2-user/test-tanya.pem
 
 [database]
-db ansible_host=10.0.2.168 ansible_user=ec2-user ansible_ssh_private_key_file=/home/ec2-user/test-tanya.pem
+db ansible_host=10.0.2.7 ansible_user=ec2-user ansible_ssh_private_key_file=/home/ec2-user/test-tanya.pem
+
+scp -i test-tanya.pem test-tanya.pem ec2-user@16.170.98.227:~  in powershell in windows
+cd /home/ec2-user
+chmod 400 ~/test-tanya.pem
+Do for all three from bastion server ec2 
+close bastion server and connect again(three times, for each server)
+ssh -i ~/test-tanya.pem ec2-user@10.0.2.23
+ssh -i ~/test-tanya.pem ec2-user@10.0.2.75
+ssh -i ~/test-tanya.pem ec2-user@10.0.2.7
+
+ansible appservers -i inventory.ini -m ping
 
 
 vi appservers.yml
@@ -383,9 +389,61 @@ vi appservers.yml
         state: started
         enabled: yes
 
+```yaml
+---
+- hosts: appservers
+  become: yes
+
+  tasks:
+
+    - name: Update packages
+      dnf:
+        name: "*"
+        state: latest
+
+    - name: Install Docker
+      dnf:
+        name: docker
+        state: present
+
+    - name: Start and Enable Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: yes
+
+    - name: Download Docker Compose
+      get_url:
+        url: https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Create symbolic link for docker-compose
+      file:
+        src: /usr/local/bin/docker-compose
+        dest: /usr/bin/docker-compose
+        state: link
+
+    - name: Verify Docker Compose installation
+      command: docker-compose --version
+      register: compose_version
+      changed_when: false
+
+    - name: Display Docker Compose version
+      debug:
+        var: compose_version.stdout
+```
+
 ansible-playbook -i inventory.ini appservers.yml
 
 ansible appservers -i inventory.ini -a "docker --version"
+ansible appservers -i inventory.ini -a "docker-compose --version"
 ansible appservers -i inventory.ini -a "nginx -v"
 
 
@@ -412,7 +470,558 @@ vi db.yml
         state: started
         enabled: yes
 
+
+--- 
+
+- hosts: database 
+
+  become: yes 
+
+ 
+
+  tasks: 
+
+ 
+
+    - name: Install PostgreSQL 16 
+
+      dnf: 
+
+        name: 
+
+          - postgresql16 
+
+          - postgresql16-server 
+
+          - postgresql16-contrib 
+
+        state: present 
+
+ 
+
+    - name: Initialize PostgreSQL 
+
+      command: postgresql-setup initdb 
+
+      args: 
+
+        creates: /var/lib/pgsql/data/PG_VERSION 
+
+ 
+
+    - name: Start PostgreSQL 
+
+      service: 
+
+        name: postgresql 
+
+        state: started 
+
+        enabled: yes
+
 ansible-playbook -i inventory.ini db.yml
+
+ansible appservers -i inventory.ini -a "psql --version"
+
+
+vi app.yml
+
+--- 
+
+- hosts: appservers 
+
+  become: yes 
+
+ 
+
+  tasks: 
+
+ 
+
+    - name: Install Git 
+
+      dnf: 
+
+        name: git 
+
+        state: present 
+
+ 
+
+    - name: Clone Repo 
+
+      git: 
+
+        repo: https://github.com/Kiaraintellipaat/Online-Learning-Platform-Deployment-using-DevOps-Pipeline.git 
+
+        dest: /opt/online-learning-platform 
+
+        force: yes 
+
+ 
+
+    - name: Create Dockerfile 
+
+      copy: 
+
+        dest: /opt/online-learning-platform/Dockerfile 
+
+        content: | 
+
+          FROM nginx:latest 
+
+          COPY index.html /usr/share/nginx/html/index.html 
+
+          EXPOSE 80 
+
+ 
+
+    - name: Build Docker Image 
+
+      command: docker build -t online-learning-platform . 
+
+      args: 
+
+        chdir: /opt/online-learning-platform 
+
+ 
+
+    - name: Remove Old Container 
+
+      command: docker rm -f online-learning-platform 
+
+      ignore_errors: yes 
+
+ 
+
+    - name: Run Container 
+
+      command: docker run -d --name online-learning-platform -p 80:80 online-learning-platform 
+
+
+ansible-playbook -i inventory.ini app.yml
+
+ansible appservers -i inventory.ini -a "docker ps"
+
+How to access website->
+Internet → Public ALB (Port 80) → Private EC2 App Servers (Port 80) → Docker Container
+Final Configuration Needed
+1. Target Group
+
+In Amazon Web Services:
+
+EC2 → Target Groups
+
+Create:
+
+Setting	Value
+Target type	Instances
+Protocol	HTTP
+Port	80
+
+Health Check:
+
+Setting	Value
+Path	/
+
+Register:
+
+app1
+app2
+2. App Server Security Group
+
+Allow inbound:
+
+Type	Port	Source
+HTTP	80	ALB Security Group
+
+NOT:
+
+0.0.0.0/0
+3. Create ALB
+
+Go to:
+
+EC2 → Load Balancers
+
+Create:
+
+Setting	Value
+Type	Application Load Balancer
+Scheme	Internet-facing
+
+Choose:
+
+Public subnets
+
+Listener:
+
+Protocol	Port
+HTTP	80
+
+Forward to:
+
+Your Target Group
+4. ALB Security Group
+
+Inbound:
+
+Type	Port	Source
+HTTP	80	0.0.0.0/0
+5. Wait for Healthy Targets
+
+Check:
+
+EC2 → Target Groups → Targets
+
+Should show:
+
+healthy
+6. Access Website
+
+Copy ALB DNS:
+
+Example:
+
+my-alb-123456.eu-north-1.elb.amazonaws.com
+
+Open:
+
+http://my-alb-123456.eu-north-1.elb.amazonaws.com
+
+Your website should now open in browser and load-balance between app1 and app2.
+
+Fork the git repository to create webhook
+1. fork
+2. create webhook
+settings-> webhook
+application/json
+http://<publicip>:8080/github-webhook/
+
+How to push to git from ec2?
+git clone <>
+GitHub pat token -> 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
+contents- read/write
+
+install GitHub integration plugin
+
+
+vi jenkins.yml
+
+--- 
+
+- hosts: localhost 
+
+  become: yes 
+
+ 
+
+  tasks: 
+
+ 
+
+    - name: Install Java 21 
+
+      dnf: 
+
+        name: java-21-amazon-corretto 
+
+        state: present 
+
+ 
+
+    - name: Add Jenkins Repository 
+
+      get_url: 
+
+        url: https://pkg.jenkins.io/redhat-stable/jenkins.repo 
+
+        dest: /etc/yum.repos.d/jenkins.repo 
+
+ 
+
+    - name: Import Jenkins GPG Key 
+
+      rpm_key: 
+
+        state: present 
+
+        key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key 
+
+ 
+
+    - name: Install Jenkins 
+
+      dnf: 
+
+        name: jenkins 
+
+        state: present 
+
+ 
+
+    - name: Install Git 
+
+      dnf: 
+
+        name: git 
+
+        state: present 
+
+ 
+
+    - name: Install Docker 
+
+      dnf: 
+
+        name: docker 
+
+        state: present 
+
+ 
+
+    - name: Start Docker 
+
+      service: 
+
+        name: docker 
+
+        state: started 
+
+        enabled: yes 
+
+ 
+
+    - name: Start Jenkins 
+
+      service: 
+
+        name: jenkins 
+
+        state: started 
+
+        enabled: yes 
+
+ 
+
+    - name: Add Jenkins user to Docker group 
+
+      user: 
+
+        name: jenkins 
+
+        groups: docker 
+
+        append: yes 
+
+ 
+
+    - name: Restart Jenkins 
+
+      service: 
+
+        name: jenkins 
+
+        state: restarted 
+
+
+ansible-playbook -i localhost jenkins.yml
+sudo systemctl status Jenkins
+
+changed t3.micro to t3.medium to increase space for Jenkins build
+stop bastion ec2 instance-> instance settings-> change instance storage-> t3.medium-> start bastion ec2 instance
+
+Jenkins pipeline ->
+
+pipeline { 
+
+agent any 
+
+ 
+
+environment { 
+
+    IMAGE_NAME = "tanyabitaan/online-learning-platform-v5" 
+
+    IMAGE_TAG = "${BUILD_NUMBER}" 
+
+    CONTAINER_NAME = "online-learning-platform" 
+
+} 
+
+ 
+
+stages { 
+
+ 
+
+    stage('Checkout') { 
+
+        steps { 
+
+             git branch: 'main', 
+
+            url: 'https://github.com/Kiaraintellipaat/Online-Learning-Platform-Deployment-using-DevOps-Pipeline.git' 
+
+        } 
+
+    } 
+
+ 
+
+stage('Create Dockerfile') {
+    steps {
+        sh '''
+cat > Dockerfile <<EOF
+FROM nginx:latest
+COPY index.html /usr/share/nginx/html/index.html
+EXPOSE 80
+EOF
+
+cat Dockerfile
+'''
+    }
+}
+
+ 
+
+    stage('Unit Test') { 
+
+        steps { 
+
+            sh ''' 
+
+            echo "Running Unit Tests..." 
+
+            echo "Tests Passed" 
+
+            ''' 
+
+        } 
+
+    } 
+
+ 
+
+    stage('Build Docker Image') { 
+
+        steps { 
+
+            sh ''' 
+
+            docker build -t $IMAGE_NAME:$IMAGE_TAG . 
+
+            ''' 
+
+        } 
+
+    } 
+
+ 
+
+    stage('Docker Login') { 
+
+        steps { 
+
+            withCredentials([ 
+
+                usernamePassword( 
+
+                    credentialsId: 'dockerhub-creds', 
+
+                    usernameVariable: 'DOCKER_USER', 
+
+                    passwordVariable: 'DOCKER_PASS' 
+
+                ) 
+
+            ]) { 
+
+                sh ''' 
+
+                echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin 
+
+                ''' 
+
+            } 
+
+        } 
+
+    } 
+
+ 
+
+    stage('Push Image') { 
+
+        steps { 
+
+            sh ''' 
+
+            docker push $IMAGE_NAME:$IMAGE_TAG 
+
+ 
+
+            docker tag $IMAGE_NAME:$IMAGE_TAG $IMAGE_NAME:latest 
+
+ 
+
+            docker push $IMAGE_NAME:latest 
+
+            ''' 
+
+        } 
+
+    } 
+
+ 
+
+    stage('Deploy Container') { 
+
+        steps { 
+
+            sh ''' 
+
+            docker rm -f $CONTAINER_NAME || true 
+
+ 
+
+            docker run -d --name $CONTAINER_NAME -p 80:80 $IMAGE_NAME:$IMAGE_TAG 
+            docker ps 
+
+            ''' 
+
+        } 
+
+    } 
+
+} 
+
+ 
+
+post { 
+
+    success { 
+
+        echo 'Pipeline Successful' 
+
+    } 
+
+ 
+
+    failure { 
+
+        echo 'Pipeline Failed' 
+
+    } 
+
+} 
+
+ 
+
+} 
+
+
+docker credentials
 
 
 Kubernetes
